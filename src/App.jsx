@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { supabase } from "./supabase";
 import "./App.css";
 
 // ─────────────────────────────────────────────────────────────
@@ -1014,7 +1015,7 @@ function AuthModal({ mode, onClose, onSuccess }) {
           {tab==="signup" && <input value={form.name} onChange={e => setForm({...form,name:e.target.value})} placeholder="Display Name" style={{ background:T.bg3,border:`1px solid ${T.cardBorder}`,borderRadius:9,padding:"11px 15px",color:T.text,fontSize:14 }} />}
           <input value={form.email} onChange={e => setForm({...form,email:e.target.value})} placeholder="Email" style={{ background:T.bg3,border:`1px solid ${T.cardBorder}`,borderRadius:9,padding:"11px 15px",color:T.text,fontSize:14 }} />
           <input type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})} placeholder="Password" style={{ background:T.bg3,border:`1px solid ${T.cardBorder}`,borderRadius:9,padding:"11px 15px",color:T.text,fontSize:14 }} />
-          <button onClick={() => onSuccess({ name:form.name||"Valor Trader",email:form.email||"trader@valorworld.gg",balance:100000 })}
+          <button onClick={() => onSuccess({ tab, name:form.name, email:form.email, password:form.password })}
             style={{ background:"linear-gradient(135deg,#7c3aed,#5b21b6)",border:"none",color:"#fff",padding:"13px",borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:800,boxShadow:T.glow,marginTop:4 }}>
             {tab==="login"?"Enter the Arena →":"Create Account →"}
           </button>
@@ -1173,6 +1174,23 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [trades, setTrades] = useState([]);
   const [balance, setBalance] = useState(100000);
+  const [sbLoading, setSbLoading] = useState(true);
+
+  // Restore Supabase session on load
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session?.user) {
+        const u = data.session.user;
+        setUser({ name: u.user_metadata?.display_name || u.email?.split("@")[0] || "Valor Trader", email: u.email, id: u.id, balance: 100000 });
+        setPage("platform");
+      }
+      setSbLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) { setUser(null); setPage("splash"); }
+    });
+    return () => listener?.subscription?.unsubscribe();
+  }, []);
 
   const handleEnter = (mode) => {
     if (mode === "platform") {
@@ -1183,12 +1201,47 @@ export default function App() {
     }
   };
 
+  const handleAuthSuccess = async (formData) => {
+    const { tab, name, email, password } = formData;
+    try {
+      if (tab === "signup") {
+        const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { display_name: name } } });
+        if (error) throw error;
+        if (data.user) { setUser({ name: name || email.split("@")[0], email, id: data.user.id, balance: 100000 }); setAuthMode(null); setPage("platform"); }
+      } else {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        if (data.user) { setUser({ name: data.user.user_metadata?.display_name || email.split("@")[0], email, id: data.user.id, balance: 100000 }); setAuthMode(null); setPage("platform"); }
+      }
+    } catch (err) {
+      // Fall back to demo mode on auth error
+      setUser({ name: name || "Valor Trader", email: email || "trader@valorworld.gg", balance: 100000 });
+      setAuthMode(null);
+      setPage("platform");
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setPage("splash");
+  };
+
+  if (sbLoading) return (
+    <div style={{ background:T.bg, minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:40, marginBottom:16 }}>⚡</div>
+        <div style={{ fontSize:18, fontWeight:800, color:T.purpleLight }}>Loading ValorReplay...</div>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ background:T.bg, minHeight:"100vh" }}>
       {page === "splash" && <SplashPage onEnter={handleEnter} />}
-      {page === "platform" && <TradingPlatform user={user} onProfile={() => setPage("profile")} onLogout={() => { setPage("splash"); }} />}
+      {page === "platform" && <TradingPlatform user={user} onProfile={() => setPage("profile")} onLogout={handleLogout} />}
       {page === "profile" && <ProfilePage user={user} trades={trades} balance={balance} onBack={() => setPage("platform")} />}
-      {authMode && <AuthModal mode={authMode} onClose={() => setAuthMode(null)} onSuccess={u => { setUser(u); setBalance(u.balance||100000); setAuthMode(null); setPage("platform"); }} />}
+      {authMode && <AuthModal mode={authMode} onClose={() => setAuthMode(null)} onSuccess={handleAuthSuccess} />}
     </div>
   );
 }
